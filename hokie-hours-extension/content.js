@@ -60,7 +60,11 @@
       color: var(--fg);
       white-space: nowrap;
       font-variant-numeric: tabular-nums;
+      pointer-events: auto;
+      cursor: pointer;
     }
+    .pill[data-editing] { cursor: default; }
+    .pill:focus-visible { outline: 2px solid #ffb81c; outline-offset: 2px; }
     .pill[data-level="warn"] {
       --bg: #ffb81c;
       --fg: #2a1700;
@@ -86,19 +90,44 @@
       border-radius: 50%;
       background: var(--dot);
     }
-    .dot[hidden] { display: none; }
-    .text {
+    .dot[hidden], .text[hidden], .editor[hidden] { display: none; }
+    .text, .editor {
       display: flex;
       flex-direction: column;
+      align-items: center;
       min-width: 0;
       text-align: center;
     }
+    .edit-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 15px;
+    }
+    .edit-input {
+      box-sizing: border-box;
+      width: 4.2em;
+      height: 15px;
+      margin: 0;
+      padding: 0 4px;
+      border: 1px solid var(--fg);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--fg);
+      font: inherit;
+      text-align: center;
+      outline: none;
+      cursor: text;
+    }
+    .edit-input[aria-invalid="true"] { border-width: 2px; border-style: dashed; }
     .main {
       font-size: 13px;
       font-weight: 700;
       line-height: 15px;
     }
-    .sub {
+    .sub, .hint {
       overflow: hidden;
       color: var(--sub);
       font-size: 10px;
@@ -135,17 +164,25 @@
       :host { top: 10px !important; max-width: 40vw !important; }
       .pill { height: 29px; padding: 1px 14px 6px; gap: 5px; border-radius: 15px; }
       .bar { left: 13px; right: 13px; bottom: 3px; }
-      .sub { display: none; }
-      .main { font-size: 12px; line-height: 14px; }
+      .sub, .hint { display: none; }
+      .main, .edit-row { font-size: 12px; line-height: 14px; }
     }
     @media (max-width: 400px) {
       .pill { padding: 1px 11px 6px; gap: 4px; }
       .bar { left: 11px; right: 11px; }
-      .main { font-size: 11px; }
+      .main, .edit-row { font-size: 11px; }
     }
   `;
 
+  const REOPEN_GUARD_MS = 400;
+  const EDIT_HINT = "Enter to save · Esc to cancel";
+  const EDIT_ERROR = `Use a number like 19.8 (up to ${H.MAX_LIMIT_HOURS})`;
+
   let state = H.emptyState();
+  let limitHours = H.WEEKLY_LIMIT_HOURS;
+  let editing = false;
+  let editorClosedAt = 0;
+  let openedByKey = false;
   let ui = null;
   let tickTimer = null;
   let observer = null;
@@ -182,6 +219,11 @@
   async function readStored() {
     const result = await chrome.storage.local.get(H.STORAGE_KEY);
     return H.normalizeState(result[H.STORAGE_KEY]);
+  }
+
+  async function readLimit() {
+    const result = await chrome.storage.local.get(H.LIMIT_KEY);
+    return H.normalizeLimit(result[H.LIMIT_KEY]);
   }
 
   /** False once the extension was reloaded, disabled, or removed. */
@@ -238,9 +280,8 @@
     const root = host.attachShadow({ mode: "closed" });
     applyStyles(root);
 
+    // The pill is the only part that takes clicks; it opens the limit editor.
     const pill = make("div", "pill");
-    pill.setAttribute("role", "group");
-    pill.setAttribute("aria-label", "Weekly hours");
 
     const dot = make("span", "dot");
     dot.setAttribute("aria-hidden", "true");
@@ -258,6 +299,27 @@
     const fill = make("div", "fill");
     bar.appendChild(fill);
 
+    const editor = make("div", "editor");
+    editor.hidden = true;
+    const editRow = make("label", "edit-row");
+    const editLabel = make("span", "edit-label");
+    editLabel.textContent = "Weekly limit";
+    const input = make("input", "edit-input");
+    input.type = "text";
+    input.setAttribute("inputmode", "decimal");
+    input.setAttribute("maxlength", "6");
+    input.setAttribute("aria-label", "Weekly hour limit");
+    const unit = make("span", "edit-unit");
+    unit.textContent = "h";
+    const hint = make("span", "hint");
+    hint.setAttribute("aria-live", "polite");
+    editRow.appendChild(editLabel);
+    editRow.appendChild(input);
+    editRow.appendChild(unit);
+    editor.appendChild(editRow);
+    editor.appendChild(hint);
+
+    // The live region sits outside the pill, which acts as a button.
     const sr = make("span", "sr");
     sr.setAttribute("role", "status");
     sr.setAttribute("aria-live", "polite");
@@ -265,11 +327,103 @@
 
     pill.appendChild(dot);
     pill.appendChild(text);
+    pill.appendChild(editor);
     pill.appendChild(bar);
-    pill.appendChild(sr);
     root.appendChild(pill);
+    root.appendChild(sr);
     document.documentElement.appendChild(host);
-    ui = { host, pill, dot, main, sub, fill, sr, ariaKey: null };
+    ui = { host, pill, dot, text, main, sub, editor, input, hint, fill, sr, ariaKey: null };
+    setPillMode(false);
+
+    pill.addEventListener("click", onPillClick);
+    pill.addEventListener("keydown", onPillKey);
+    input.addEventListener("keydown", onEditorKey);
+    input.addEventListener("blur", onEditorBlur);
+  }
+
+  /* ---------- Limit editor ---------- */
+
+  function setPillMode(isEditing) {
+    if (editing && !isEditing) editorClosedAt = Date.now();
+    editing = isEditing;
+    ui.text.hidden = isEditing;
+    ui.editor.hidden = !isEditing;
+    if (isEditing) {
+      ui.pill.setAttribute("data-editing", "");
+      ui.pill.setAttribute("role", "group");
+      ui.pill.setAttribute("aria-label", "Change weekly limit");
+      ui.pill.removeAttribute("tabindex");
+      ui.pill.title = "";
+    } else {
+      ui.pill.removeAttribute("data-editing");
+      ui.pill.setAttribute("role", "button");
+      ui.pill.setAttribute("aria-label", `Weekly hours. Change the ${limitHours} hour limit`);
+      ui.pill.setAttribute("tabindex", "0");
+      ui.pill.title = "Click to change your weekly limit";
+    }
+  }
+
+  function openEditor(byKey) {
+    openedByKey = byKey;
+    setPillMode(true);
+    ui.input.value = String(limitHours);
+    ui.input.removeAttribute("aria-invalid");
+    setText(ui.hint, EDIT_HINT);
+    ui.input.focus();
+    ui.input.select();
+  }
+
+  /** Focus goes back to the pill only for keyboard users, so a mouse user sees no focus ring. */
+  function closeEditor(returnFocus) {
+    setPillMode(false);
+    if (returnFocus && openedByKey) ui.pill.focus();
+  }
+
+  /** Saves a typed limit. A bad value stays open after Enter and is dropped on click-away. */
+  function commitLimit(fromKey) {
+    const value = H.parseLimitInput(ui.input.value);
+    if (value === null) {
+      if (!fromKey) {
+        closeEditor(false);
+        return;
+      }
+      ui.input.setAttribute("aria-invalid", "true");
+      setText(ui.hint, EDIT_ERROR);
+      return;
+    }
+    const changed = value !== limitHours;
+    limitHours = value;
+    closeEditor(fromKey);
+    render();
+    if (!changed) return;
+    try {
+      chrome.storage.local.set({ [H.LIMIT_KEY]: value }).catch(handleStorageError);
+    } catch (_) {
+      handleStorageError();
+    }
+  }
+
+  function onPillClick(event) {
+    // Clicking the pill's edge while editing first blurs the box, which closes it; stay closed.
+    const justClosed = Date.now() - editorClosedAt < REOPEN_GUARD_MS;
+    if (event.isTrusted && !editing && !stopped && !justClosed) openEditor(false);
+  }
+
+  function onPillKey(event) {
+    // Keys typed in the editor bubble up here; only a key on the pill itself opens it.
+    if (event.isTrusted && !editing && !stopped && event.target === ui.pill && event.key === "Enter") {
+      openEditor(true);
+    }
+  }
+
+  function onEditorKey(event) {
+    if (!event.isTrusted || !editing) return;
+    if (event.key === "Enter") commitLimit(true);
+    else if (event.key === "Escape") closeEditor(true);
+  }
+
+  function onEditorBlur() {
+    if (editing) commitLimit(false);
   }
 
   function setText(node, value) {
@@ -278,7 +432,7 @@
 
   function render() {
     if (!ui || stopped) return;
-    const view = H.toViewModel(H.computeStatus(state, Date.now()), {
+    const view = H.toViewModel(H.computeStatus(state, Date.now(), limitHours), {
       loading: refreshing,
       refreshFailed,
     });
@@ -635,8 +789,15 @@
   }
 
   function onStorageChanged(changes, area) {
-    if (area !== "local" || !changes[H.STORAGE_KEY]) return;
-    state = H.normalizeState(changes[H.STORAGE_KEY].newValue);
+    if (area !== "local") return;
+    const stateChange = changes[H.STORAGE_KEY];
+    const limitChange = changes[H.LIMIT_KEY];
+    if (!stateChange && !limitChange) return;
+    if (stateChange) state = H.normalizeState(stateChange.newValue);
+    if (limitChange) {
+      limitHours = H.normalizeLimit(limitChange.newValue);
+      if (!editing) setPillMode(false);
+    }
     render();
   }
 
@@ -667,6 +828,7 @@
   async function start() {
     try {
       state = await readStored();
+      limitHours = await readLimit();
     } catch (_) {
       return;
     }

@@ -13,8 +13,10 @@
   "use strict";
 
   const WEEKLY_LIMIT_HOURS = 20;
+  const MAX_LIMIT_HOURS = 168;
 
   const STORAGE_KEY = "weeklyHoursState.v1";
+  const LIMIT_KEY = "weeklyLimitHours";
   const MS_PER_SECOND = 1000;
   const MS_PER_MINUTE = 60 * MS_PER_SECOND;
   const MS_PER_HOUR = 60 * MS_PER_MINUTE;
@@ -783,6 +785,25 @@
     return next;
   }
 
+  /* ---------- Weekly limit ---------- */
+
+  const roundLimit = (n) => Math.round(n * 100) / 100;
+  const usableLimit = (n) => Number.isFinite(n) && n > 0 && n <= MAX_LIMIT_HOURS;
+
+  /** The saved limit, or the 20-hour default when none is saved or it is unusable. */
+  function normalizeLimit(value) {
+    const n = typeof value === "number" ? roundLimit(value) : NaN;
+    return usableLimit(n) ? n : WEEKLY_LIMIT_HOURS;
+  }
+
+  /** What the user typed, like "19.8" or "19,8", as hours. Null when it is not a usable limit. */
+  function parseLimitInput(text) {
+    const t = String(text == null ? "" : text).trim().replace(",", ".");
+    if (!/^(?:\d{1,3}(?:\.\d*)?|\.\d+)$/.test(t)) return null;
+    const n = roundLimit(Number(t));
+    return usableLimit(n) ? n : null;
+  }
+
   /* ---------- Status ---------- */
 
   function computeStatus(state, nowMs, limitHours = WEEKLY_LIMIT_HOURS) {
@@ -798,7 +819,8 @@
     const closeoutMs = closeoutMsInWeek(state.closeouts || [], week);
 
     const usedMs = recordedMs + liveMs + closeoutMs;
-    const limitMs = limitHours * MS_PER_HOUR;
+    // Rounded so a limit like 19.8 h is a whole number of milliseconds.
+    const limitMs = Math.round(limitHours * MS_PER_HOUR);
     const remainingMs = limitMs - usedMs;
 
     const periods = Object.values(state.periods);
@@ -937,7 +959,11 @@
 
   return {
     WEEKLY_LIMIT_HOURS,
+    MAX_LIMIT_HOURS,
     STORAGE_KEY,
+    LIMIT_KEY,
+    normalizeLimit,
+    parseLimitInput,
     CLOCKED_IN,
     CLOCKED_OUT,
     UNKNOWN,

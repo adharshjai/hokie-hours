@@ -21,6 +21,8 @@ class FakeElement {
     this.id = "";
     this.title = "";
     this.src = "";
+    this.value = "";
+    this.listeners = {};
     this.styleProps = {};
     const self = this;
     this.style = { cssText: "", setProperty(k, v) { self.styleProps[k] = v; } };
@@ -42,6 +44,13 @@ class FakeElement {
   }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  removeEventListener(type, fn) {
+    this.listeners[type] = (this.listeners[type] || []).filter((f) => f !== fn);
+  }
+  focus() { this.env.focused = this; }
+  select() { this.env.selected = this; }
   attachShadow(init) {
     this.shadowInit = init;
     this.shadow = new FakeElement("shadow-root", this.env);
@@ -217,6 +226,14 @@ function boot(options = {}) {
   env.userClick = () => {
     for (const { fn } of env.listeners.click || []) {
       fn({ isTrusted: true, target: env.button });
+    }
+  };
+  // Sends a user event to a widget element; events bubble from the input to the pill.
+  env.fire = (className, type, init = {}) => {
+    const target = env.node(className);
+    const event = { isTrusted: true, target, ...init };
+    for (let node = target; node; node = node.parent) {
+      for (const fn of node.listeners[type] || []) fn(event);
     }
   };
   env.userInput = () => {

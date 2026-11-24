@@ -43,13 +43,20 @@ test("shipped code contains no forbidden APIs", () => {
     /synchronizerToken/i, /document\.cookie/, /chrome\.cookies/,
     /preventDefault/, /stopPropagation/, /stopImmediatePropagation/,
     /dispatchEvent/, /new\s+(?:Mouse|Keyboard|Pointer|Custom)?Event\s*\(/,
-    /\.click\s*\(/, /\.focus\s*\(/, /\.blur\s*\(/, /\.submit\s*\(/, /requestSubmit/,
+    /\.click\s*\(/, /\.blur\s*\(/, /\.submit\s*\(/, /requestSubmit/,
     /\beval\s*\(/, /new\s+Function/, /importScripts/, /import\s*\(/,
     /https?:\/\/(?!selfservice)/, /analytics/i,
   ];
   for (const [name, source] of [["content.js", content], ["hours.js", hours]]) {
     for (const pattern of forbidden) assert.doesNotMatch(source, pattern, `${name}: ${pattern}`);
   }
+});
+
+test("focus moves only between the widget's own pill and limit box", () => {
+  assert.doesNotMatch(hours, /\.focus\s*\(/);
+  const calls = content.match(/[\w.]*\.focus\s*\(/g) || [];
+  assert.ok(calls.length > 0);
+  for (const call of calls) assert.match(call, /^ui\.(?:input|pill)\.focus\s*\($/);
 });
 
 test("no hardcoded job id in shipped code", () => {

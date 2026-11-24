@@ -5,7 +5,7 @@
 <h1 align="center">Hokie Hours</h1>
 
 <p align="center">
-  A Chrome extension that shows how many hours you have left under the 20-hour weekly limit
+  A Chrome extension that shows how many hours you have left under your weekly limit (20 by default)
   on your Virginia Tech Banner timesheet. It counts down live while you're clocked in.
 </p>
 
@@ -18,6 +18,11 @@
 4. Click **Load unpacked** and select the **`hokie-hours-extension`** folder inside the download.
 5. Open your timesheet in [Banner](https://selfservice.banner.vt.edu/EmployeeSelfService/ssb/hrDashboard)
    (**Enter Time** → your pay period). The hours pill appears at the top of the page.
+
+## Change the limit
+
+The limit is 20 hours by default. To change it, click the countdown, type a new limit (like `19.8`),
+and press **Enter**. Press **Esc** to cancel.
 
 ## Update
 
